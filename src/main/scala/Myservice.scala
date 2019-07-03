@@ -3,6 +3,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.Trigger
+import org.apache.spark.util.MyserviceTestShutdownHook
 
 object Myservice {
   def main(args: Array[String]): Unit = {
@@ -27,7 +28,7 @@ object Myservice {
       .option("kafka.bootstrap.servers", "192.168.1.105:9092")
       .option("subscribe", "payment")
       .option("startingOffsets", "earliest")
-      //.option("includeTimestamp",true)
+      .option("includeTimestamp",true)
       .load.selectExpr("topic", "CAST(value AS STRING)").select($"value")
 
     val schema = (new StructType)
@@ -54,14 +55,32 @@ object Myservice {
         $"id_driver")
       .agg(sum("tour_value") as "totalSum")
 
-    val filteredDF = windowedCounts.select("id_driver", "totalSum").filter("totalSum > 200")
+    val filteredDF = windowedCounts.select("id_driver", "totalSum").filter("totalSum > 20")
 
-    windowedCounts.printSchema()
+    filteredDF.printSchema()
 
     //  val windowedCounts = rdf
     // .groupBy("id_driver").count()
-    sink.hdfsSink(rdf,"C:\\Users\\RAJESH\\Desktop\\data","C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation")
-    sink.kafkaSink(df2, "paymentSink1", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation1")
-    sink.kafkaSink(filteredDF, "paymentSink", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation2")
+   // sink.hdfsSink(rdf,"C:\\Users\\RAJESH\\Desktop\\data\\data1","C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation1")
+   //sink.hdfsSink(df2, "C:\\Users\\RAJESH\\Desktop\\data\\data2", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation2")
+    //sink.kafkaSink(filteredDF, "paymentSink1", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation3")
+  //  sink.kafkaSink(df2, "paymentSink1", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation4")
+
+    val df2csv = spark.readStream
+      .format("kafka")
+      //  .option("kafka.bootstrap.servers", "PLAINTEXT://ip-172-31-38-146.ec2.internal:6667")
+      .option("kafka.bootstrap.servers", "192.168.1.105:9092")
+      .option("subscribe", "paymentSink1")
+      .option("startingOffsets", "earliest")
+      .option("includeTimestamp",true)
+      .load()
+
+
+
+    sink.hdfsSink(df2csv, "C:\\Users\\RAJESH\\Desktop\\data\\data2", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation2")
+
+
+    MyserviceTestShutdownHook.install(spark.streams)
+    spark.streams.awaitAnyTermination()
   }
 }
