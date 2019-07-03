@@ -24,12 +24,14 @@ object Myservice {
     val df = spark
       .readStream
       .format("kafka")
-      //  .option("kafka.bootstrap.servers", "PLAINTEXT://ip-172-31-38-146.ec2.internal:6667")
       .option("kafka.bootstrap.servers", "192.168.1.105:9092")
-      .option("subscribe", "payment")
+      .option("subscribe", "payment,paymentSink")
       .option("startingOffsets", "earliest")
-      .option("includeTimestamp",true)
-      .load.selectExpr("topic", "CAST(value AS STRING)").select($"value")
+      .load.selectExpr("topic", "CAST(value AS STRING)")
+
+    val sourceDF = df.filter($"topic"==="payment").select($"value")
+    val partialAggDF = df.filter($"topic"==="paymentSink").select($"value")
+
 
     val schema = (new StructType)
       .add("id", "int", true)
@@ -38,47 +40,26 @@ object Myservice {
       .add("id_driver", "int", true)
       .add("id_passenger", "int", true)
 
-    val rdf = df.select(from_json($"value", schema) as "value").select("value.*")
-    rdf.printSchema()
-
-    // val agg = rdf.groupBy(rdf.col("id_driver")).agg(sum("tour_value"))
-
-    rdf.createOrReplaceTempView("uber")
-
-    val df2 = spark.sql("select id_driver, sum(tour_value) as totalSum from uber group by id_driver")
+    val flattenedDF = sourceDF.select(from_json($"value", schema) as "value").select("value.*")
+    flattenedDF.printSchema()
+    flattenedDF.createOrReplaceTempView("uber")
+    val useCase2  = spark.sql("select id_driver, sum(tour_value) as totalSum from uber group by id_driver")
 
 
-    val windowedCounts = rdf
-      .withWatermark("event_date", "1 minutes")
-      .groupBy(
-        window($"event_date", "1 minutes"),
-        $"id_driver")
-      .agg(sum("tour_value") as "totalSum")
+       val windowedCounts = flattenedDF
+          .withWatermark("event_date", "1 minutes")
+          .groupBy(
+            window($"event_date", "1 minutes"),
+            $"id_driver")
+          .agg(sum("tour_value") as "totalSum")
 
-    val filteredDF = windowedCounts.select("id_driver", "totalSum").filter("totalSum > 20")
+        val filteredDF = windowedCounts.select("id_driver", "totalSum").filter("totalSum > 20")
+        filteredDF.printSchema()
 
-    filteredDF.printSchema()
-
-    //  val windowedCounts = rdf
-    // .groupBy("id_driver").count()
-   // sink.hdfsSink(rdf,"C:\\Users\\RAJESH\\Desktop\\data\\data1","C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation1")
-   //sink.hdfsSink(df2, "C:\\Users\\RAJESH\\Desktop\\data\\data2", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation2")
-    //sink.kafkaSink(filteredDF, "paymentSink1", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation3")
-  //  sink.kafkaSink(df2, "paymentSink1", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation4")
-
-    val df2csv = spark.readStream
-      .format("kafka")
-      //  .option("kafka.bootstrap.servers", "PLAINTEXT://ip-172-31-38-146.ec2.internal:6667")
-      .option("kafka.bootstrap.servers", "192.168.1.105:9092")
-      .option("subscribe", "paymentSink1")
-      .option("startingOffsets", "earliest")
-      .option("includeTimestamp",true)
-      .load()
-
-
-
-    sink.hdfsSink(df2csv, "C:\\Users\\RAJESH\\Desktop\\data\\data2", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation2")
-
+    sink.hdfsSink(sourceDF,"C:\\Users\\RAJESH\\Desktop\\data\\data1","C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation1")
+    sink.kafkaSink(useCase2, "paymentSink", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation3")
+    sink.kafkaSink(filteredDF, "paymentSink1", "C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation4")
+    sink.hdfsSink(partialAggDF,"C:\\Users\\RAJESH\\Desktop\\data\\data2","C:\\Users\\RAJESH\\Desktop\\checkpointLocations\\checkpointLocation2")
 
     MyserviceTestShutdownHook.install(spark.streams)
     spark.streams.awaitAnyTermination()
